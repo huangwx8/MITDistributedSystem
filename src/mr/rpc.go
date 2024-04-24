@@ -24,6 +24,42 @@ type ExampleReply struct {
 
 // Add your RPC definitions here.
 
+const (
+	TASK_TYPE_MAP    int = 1
+	TASK_TYPE_REDUCE int = 2
+)
+
+type RPCError struct {
+	errMsg string
+}
+
+func (e *RPCError) Error() string {
+	return e.errMsg
+}
+
+type AssignTaskArgs struct {
+}
+
+type AssignTaskReply struct {
+	TaskID   int
+	NReduce  int
+	TaskType int
+	Filename string
+}
+
+type NotifyMapDoneArgs struct {
+	TaskID int
+}
+
+type NotifyMapDoneReply struct {
+}
+
+type NotifyReduceDoneArgs struct {
+	TaskID int
+}
+
+type NotifyReduceDoneReply struct {
+}
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.
