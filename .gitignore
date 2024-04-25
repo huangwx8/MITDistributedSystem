@@ -4,3 +4,5 @@ api.key
 *-handin.tar.gz
 .DS_Store
 .idea
+src/go.sum
+src/go.mod
