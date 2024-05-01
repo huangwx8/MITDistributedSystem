@@ -64,6 +64,7 @@ const (
 
 const HEARTBEAT_INTERVAL_MS = 100
 const COMMIT_INTERVAL_MS = 10
+const APPLY_INTERVAL_MS = 10
 const HEARTBEAT_TIMEOUT_MS = 1000
 const COUNT_VOTES_INTERVAL_MS = 5
 const ELECTION_TIMEOUT_MS = 500
@@ -80,7 +81,9 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
-	applyCh chan ApplyMsg
+	applyCh     chan ApplyMsg
+	applyBuffer []ApplyMsg
+	applyMu     sync.Mutex
 
 	// Non-volatile
 	currentTerm   int
@@ -199,6 +202,9 @@ func (rf *Raft) readPersist(data []byte) {
 // that index. Raft should now trim its log as much as possible.
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (3D).
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
 	index = index - 1
 
@@ -338,6 +344,9 @@ type AppendEntriesReply struct {
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	rf.applyMu.Lock()
+	defer rf.applyMu.Unlock()
+
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
@@ -458,6 +467,9 @@ type InstallSnapshotReply struct {
 }
 
 func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
+	rf.applyMu.Lock()
+	defer rf.applyMu.Unlock()
+
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
@@ -516,6 +528,14 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	if rf.lastApplied < rf.snapshotIndex {
 		rf.lastApplied = rf.snapshotIndex
 	}
+
+	filteredApplyBuffer := make([]ApplyMsg, 0)
+	for _, applyMsg := range rf.applyBuffer {
+		if applyMsg.CommandIndex > rf.lastApplied {
+			filteredApplyBuffer = append(filteredApplyBuffer, applyMsg)
+		}
+	}
+	rf.applyBuffer = filteredApplyBuffer
 
 	rf.persist()
 
@@ -715,10 +735,24 @@ func (rf *Raft) tickBroadcastHeartbeat() {
 
 func (rf *Raft) tickCommit() {
 	for !rf.killed() {
+		rf.applyMu.Lock()
 		rf.mu.Lock()
 		rf.commitMatchedEntries()
 		rf.mu.Unlock()
+		rf.applyMu.Unlock()
 		time.Sleep(COMMIT_INTERVAL_MS * time.Millisecond)
+	}
+}
+
+func (rf *Raft) tickApply() {
+	for !rf.killed() {
+		rf.applyMu.Lock()
+		for _, msg := range rf.applyBuffer {
+			rf.applyCh <- msg
+		}
+		rf.applyBuffer = make([]ApplyMsg, 0)
+		rf.applyMu.Unlock()
+		time.Sleep(APPLY_INTERVAL_MS * time.Millisecond)
 	}
 }
 
@@ -813,14 +847,13 @@ func (rf *Raft) doCommit(logIndex int) {
 
 	DPrintf("Node[%d][%s]: doCommit logIndex=[%d]", rf.me, rf.state, logIndex)
 
-	rf.commitIndex = logIndex
-
-	for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ {
+	for i := rf.commitIndex + 1; i <= logIndex; i++ {
 		msg := ApplyMsg{CommandValid: true, Command: rf.log[rf.l2p(i)].Command, CommandIndex: i + 1}
-		rf.applyCh <- msg
+		rf.applyBuffer = append(rf.applyBuffer, msg)
+		DPrintf("Node[%d][%s]: Append msg to applyBuffer Index=[%d]", rf.me, rf.state, i)
 	}
 
-	rf.lastApplied = rf.commitIndex
+	rf.commitIndex = logIndex
 }
 
 // the service or tester wants to create a Raft server. the ports
@@ -842,6 +875,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// Your initialization code here (3A, 3B, 3C).
 
 	rf.applyCh = applyCh
+	rf.applyBuffer = make([]ApplyMsg, 0)
 
 	n := len(rf.peers)
 
@@ -876,6 +910,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// leader's routines
 	go rf.tickBroadcastHeartbeat()
 	go rf.tickCommit()
+	go rf.tickApply()
 
 	return rf
 }
