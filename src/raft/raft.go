@@ -182,6 +182,7 @@ func (rf *Raft) readPersist(data []byte) {
 		rf.currentTerm = currentTerm
 		rf.votedFor = votedFor
 		rf.log = log
+		rf.snapshot = rf.persister.ReadSnapshot()
 		rf.snapshotIndex = snapshotIndex
 		rf.snapshotTerm = snapshotTerm
 		rf.commitIndex = rf.snapshotIndex
