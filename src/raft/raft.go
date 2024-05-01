@@ -18,6 +18,8 @@ package raft
 //
 
 import (
+	"6.5840/labgob"
+	"bytes"
 	//	"bytes"
 	"math/rand"
 	"sync"
@@ -64,7 +66,7 @@ const HEARTBEAT_INTERVAL_MS = 100
 const COMMIT_INTERVAL_MS = 10
 const HEARTBEAT_TIMEOUT_MS = 1000
 const COUNT_VOTES_INTERVAL_MS = 5
-const ELECTION_TIMEOUT_MS = 100
+const ELECTION_TIMEOUT_MS = 500
 
 // A Go object implementing a single Raft peer.
 type Raft struct {
@@ -129,6 +131,14 @@ func (rf *Raft) persist() {
 	// e.Encode(rf.yyy)
 	// raftstate := w.Bytes()
 	// rf.persister.Save(raftstate, nil)
+
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.votedFor)
+	e.Encode(rf.log)
+	raftstate := w.Bytes()
+	rf.persister.Save(raftstate, nil)
 }
 
 // restore previously persisted state.
@@ -149,6 +159,21 @@ func (rf *Raft) readPersist(data []byte) {
 	//   rf.xxx = xxx
 	//   rf.yyy = yyy
 	// }
+
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var currentTerm int
+	var votedFor int
+	var log []LogEntry
+	if d.Decode(&currentTerm) != nil ||
+		d.Decode(&votedFor) != nil ||
+		d.Decode(&log) != nil {
+		DPrintf("readPersist err")
+	} else {
+		rf.currentTerm = currentTerm
+		rf.votedFor = votedFor
+		rf.log = log
+	}
 }
 
 // the service says it has created a snapshot that has
@@ -213,6 +238,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			rf.lastReceivedHeartbeatTimestampMs = time.Now().UnixMilli() // candidate is alive
 			DPrintf("Node[%d][%s]: RequestVote SUCCESS candidate=[%d] Term=[%d]", rf.me, rf.state, args.CandidateId, args.Term)
 			rf.votedFor = args.CandidateId
+			rf.persist()
 			reply.VoteGranted = true
 			reply.Term = args.Term
 			return
@@ -331,21 +357,32 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 	}
 
-	// resize
-	newLen := args.PrevLogIndex + len(args.Entries) + 1
-	if newLen < len(rf.log) {
-		rf.log = rf.log[:newLen]
-	} else if newLen > len(rf.log) {
-		budget := newLen - len(rf.log)
-		for i := 0; i < budget; i++ {
-			rf.log = append(rf.log, LogEntry{})
+	indexEntries := 0
+
+	for ; indexEntries < len(args.Entries); indexEntries++ {
+		indexLog := args.PrevLogIndex + 1 + indexEntries
+		if indexLog >= len(rf.log) {
+			break
+		} else if rf.log[indexLog].Term != args.Entries[indexEntries].Term {
+			// truncate
+			rf.log = rf.log[:indexLog]
+			break
 		}
 	}
 
-	// sync
-	for j := 0; j < len(args.Entries); j++ {
-		rf.log[args.PrevLogIndex+1+j] = args.Entries[j]
+	if indexEntries < len(args.Entries) {
+		// overwrite
+		for ; indexEntries < len(args.Entries); indexEntries++ {
+			indexLog := args.PrevLogIndex + 1 + indexEntries
+			if indexLog >= len(rf.log) {
+				rf.log = append(rf.log, args.Entries[indexEntries])
+			} else {
+				rf.log[indexLog] = args.Entries[indexEntries]
+			}
+		}
 	}
+
+	rf.persist()
 
 	if args.LeaderCommit > rf.commitIndex {
 		n := len(rf.log) - 1
@@ -403,6 +440,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		rf.nextIndex[rf.me] = index + 1
 		isLeader = true
 
+		rf.persist()
+
 		DPrintf("Node[%d][%s]: Start term=[%d] index=[%d]", rf.me, rf.state, term, index)
 
 		if term < lastLogTerm {
@@ -448,6 +487,7 @@ func (rf *Raft) ticker() {
 			rf.state = RAFT_STATE_CANDIDATE
 			rf.currentTerm++
 			rf.votedFor = rf.me
+			rf.persist()
 
 			if rf.state == RAFT_STATE_CANDIDATE {
 				DPrintf("Node[%d][%s]: Start election for term[%d]", rf.me, rf.state, rf.currentTerm)
@@ -469,7 +509,11 @@ func (rf *Raft) ticker() {
 						go func(dest int) {
 							reply := RequestVoteReply{}
 							if rf.sendRequestVote(dest, &args, &reply) {
+								if rf.killed() {
+									return
+								}
 								rf.mu.Lock()
+								DPrintf("Node[%d][%s]: Received RequestVoteReply for term[%d] VoteGranted=[%v]", rf.me, rf.state, reply.Term, reply.VoteGranted)
 								if (time.Now().UnixMilli()-startElectionTimestamp) < ELECTION_TIMEOUT_MS &&
 									rf.state == RAFT_STATE_CANDIDATE &&
 									rf.currentTerm == reply.Term &&
@@ -481,6 +525,9 @@ func (rf *Raft) ticker() {
 								}
 								rf.mu.Unlock()
 							} else {
+								if rf.killed() {
+									return
+								}
 								rf.mu.Lock()
 								numReplies++
 								rf.mu.Unlock()
@@ -493,6 +540,11 @@ func (rf *Raft) ticker() {
 				for (numReplies < n) && ((time.Now().UnixMilli() - startElectionTimestamp) < ELECTION_TIMEOUT_MS) {
 					rf.mu.Unlock()
 					time.Sleep(COUNT_VOTES_INTERVAL_MS * time.Millisecond)
+
+					if rf.killed() {
+						return
+					}
+
 					rf.mu.Lock()
 
 					// state could have changed while sleeping
@@ -511,7 +563,8 @@ func (rf *Raft) ticker() {
 					DPrintf("Node[%d][%s]: Won election for term [%d]", rf.me, rf.state, rf.currentTerm)
 					rf.toLeader()
 				} else {
-					DPrintf("Node[%d][%s]: Lost election for term [%d]", rf.me, rf.state, rf.currentTerm)
+					DPrintf("Node[%d][%s]: Lost election for term [%d] numReplies=[%d] numVotes=[%d]",
+						rf.me, rf.state, rf.currentTerm, numReplies, numVotes)
 					rf.toFollower()
 				}
 			}
@@ -618,6 +671,7 @@ func (rf *Raft) doCommit(logIndex int) {
 	DPrintf("Node[%d][%s]: doCommit logIndex=[%d]", rf.me, rf.state, logIndex)
 
 	rf.commitIndex = logIndex
+
 	for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ {
 		msg := ApplyMsg{CommandValid: true, Command: rf.log[i].Command, CommandIndex: i + 1}
 		rf.applyCh <- msg
@@ -713,6 +767,7 @@ func (rf *Raft) receiveTerm(term int, isLeader bool) {
 		DPrintf("Node[%d][%s]: Update term[%d]", rf.me, rf.state, term)
 		rf.currentTerm = term
 		rf.votedFor = -1
+		rf.persist()
 	}
 
 	if (rf.state == RAFT_STATE_LEADER || rf.state == RAFT_STATE_CANDIDATE) && (foundHigherTerm || foundNewLeader) {
