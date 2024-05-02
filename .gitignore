@@ -6,3 +6,4 @@ api.key
 .idea
 src/go.sum
 src/go.mod
+*.log
