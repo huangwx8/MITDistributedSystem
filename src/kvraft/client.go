@@ -4,10 +4,13 @@ import "6.5840/labrpc"
 import "crypto/rand"
 import "math/big"
 
-
 type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// You will have to modify this struct.
+
+	assumedLeaderId int
+	clerkId         int64
+	sequenceNumber  int
 }
 
 func nrand() int64 {
@@ -21,6 +24,9 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
 	// You'll have to add code here.
+
+	ck.InitClerk()
+
 	return ck
 }
 
@@ -37,7 +43,26 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 func (ck *Clerk) Get(key string) string {
 
 	// You will have to modify this function.
-	return ""
+
+	args := GetArgs{}
+	args.Key = key
+	args.ClerkId = ck.clerkId
+
+	reply := GetReply{}
+
+	for {
+		ok := ck.servers[ck.assumedLeaderId].Call("KVServer.Get", &args, &reply)
+
+		if ok {
+			if reply.Err == OK {
+				return reply.Value
+			} else if reply.Err == ErrNoKey {
+				return ""
+			}
+		}
+
+		ck.rr()
+	}
 }
 
 // shared by Put and Append.
@@ -50,6 +75,27 @@ func (ck *Clerk) Get(key string) string {
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
+
+	args := PutAppendArgs{}
+	args.Key = key
+	args.Value = value
+	args.ClerkId = ck.clerkId
+	ck.sequenceNumber++
+	args.SequenceNumber = ck.sequenceNumber
+
+	reply := PutAppendReply{}
+
+	for {
+		ok := ck.servers[ck.assumedLeaderId].Call("KVServer."+op, &args, &reply)
+
+		if ok {
+			if reply.Err == OK {
+				return
+			}
+		}
+
+		ck.rr()
+	}
 }
 
 func (ck *Clerk) Put(key string, value string) {
@@ -57,4 +103,22 @@ func (ck *Clerk) Put(key string, value string) {
 }
 func (ck *Clerk) Append(key string, value string) {
 	ck.PutAppend(key, value, "Append")
+}
+
+func (ck *Clerk) InitClerk() {
+	// You will have to modify this function.
+
+	ck.clerkId = INVALID_CLERK_ID
+
+	for ck.clerkId == INVALID_CLERK_ID {
+		ck.clerkId = nrand()
+	}
+
+	ck.sequenceNumber = 0
+	ck.assumedLeaderId = 0
+}
+
+// round-robin
+func (ck *Clerk) rr() {
+	ck.assumedLeaderId = (ck.assumedLeaderId + 1) % len(ck.servers)
 }
