@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-const Debug = false
+const Debug = true
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug {
@@ -42,6 +42,7 @@ type OpResult struct {
 	valid bool
 	err   Err
 	value string
+	term  int
 }
 
 type ClerkWriteHistory struct {
@@ -68,7 +69,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
 
 	if kv.killed() {
-		DPrintf("KV[%d] Get[%s] killed", kv.me, args.Key)
+		DPrintf("KV[%d] [%d]Get[%s] killed", kv.me, args.ClerkId, args.Key)
 		reply.Err = ErrWrongLeader
 		return
 	}
@@ -80,12 +81,12 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	index, _, isLeader := kv.rf.Start(op)
 
 	if !isLeader {
-		DPrintf("KV[%d] Get[%s] NOT Leader", kv.me, args.Key)
+		DPrintf("KV[%d] [%d]Get[%s] NOT Leader", kv.me, args.ClerkId, args.Key)
 		reply.Err = ErrWrongLeader
 		kv.mu.Unlock()
 		return
 	} else {
-		DPrintf("KV[%d] Get[%s] index=[%d] Requested raft", kv.me, args.Key, index)
+		DPrintf("KV[%d] [%d]Get[%s] index=[%d] Requested raft", kv.me, args.ClerkId, args.Key, index)
 	}
 
 	kv.opResults[index] = OpResult{valid: false, err: "", value: ""}
@@ -99,7 +100,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 
 		if kv.killed() {
 			reply.Err = ErrWrongLeader
-			DPrintf("KV[%d] Get[%s] index=[%d] Killed", kv.me, args.Key, index)
+			DPrintf("KV[%d] [%d]Get[%s] index=[%d] Killed", kv.me, args.ClerkId, args.Key, index)
 			delete(kv.opResults, index)
 			kv.mu.Unlock()
 			return
@@ -108,7 +109,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		if kv.opResults[index].valid {
 			reply.Value = kv.opResults[index].value
 			reply.Err = kv.opResults[index].err
-			DPrintf("KV[%d] Get[%s] index=[%d] %s Value=[%s]", kv.me, args.Key, index, reply.Err, reply.Value)
+			DPrintf("KV[%d] [%d]Get[%s] index=[%d] %s Value=[%s]", kv.me, args.ClerkId, args.Key, index, reply.Err, reply.Value)
 			delete(kv.opResults, index)
 			kv.mu.Unlock()
 			return
@@ -118,7 +119,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 
 		if !isLeader {
 			reply.Err = ErrWrongLeader
-			DPrintf("KV[%d] Get[%s] index=[%d] Lost leadership", kv.me, args.Key, index)
+			DPrintf("KV[%d] [%d]Get[%s] index=[%d] Lost leadership", kv.me, args.ClerkId, args.Key, index)
 			delete(kv.opResults, index)
 			kv.mu.Unlock()
 			return
@@ -132,7 +133,7 @@ func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
 
 	if kv.killed() {
-		DPrintf("KV[%d] Put[%s] killed", kv.me, args.Key)
+		DPrintf("KV[%d] [%d]Put[%s] killed", kv.me, args.ClerkId, args.Key)
 		reply.Err = ErrWrongLeader
 		return
 	}
@@ -144,12 +145,12 @@ func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
 	index, _, isLeader := kv.rf.Start(op)
 
 	if !isLeader {
-		DPrintf("KV[%d] Put[%s] NOT Leader", kv.me, args.Key)
+		DPrintf("KV[%d] [%d]Put[%s] NOT Leader", kv.me, args.ClerkId, args.Key)
 		reply.Err = ErrWrongLeader
 		kv.mu.Unlock()
 		return
 	} else {
-		DPrintf("KV[%d] Put[%s] index=[%d] Requested raft", kv.me, args.Key, index)
+		DPrintf("KV[%d] [%d]Put[%s] index=[%d] Value=[%s] Requested raft", kv.me, args.ClerkId, args.Key, index, args.Value)
 	}
 
 	kv.opResults[index] = OpResult{valid: false, err: "", value: ""}
@@ -163,7 +164,7 @@ func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
 
 		if kv.killed() {
 			reply.Err = ErrWrongLeader
-			DPrintf("KV[%d] Put[%s] index=[%d] Killed", kv.me, args.Key, index)
+			DPrintf("KV[%d] [%d]Put[%s] index=[%d] Killed", kv.me, args.ClerkId, args.Key, index)
 			delete(kv.opResults, index)
 			kv.mu.Unlock()
 			return
@@ -171,7 +172,7 @@ func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
 
 		if kv.opResults[index].valid {
 			reply.Err = kv.opResults[index].err
-			DPrintf("KV[%d] Put[%s] index=[%d] %s", kv.me, args.Key, index, reply.Err)
+			DPrintf("KV[%d] [%d]Put[%s] index=[%d] %s", kv.me, args.ClerkId, args.Key, index, reply.Err)
 			delete(kv.opResults, index)
 			kv.mu.Unlock()
 			return
@@ -181,7 +182,7 @@ func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
 
 		if !isLeader {
 			reply.Err = ErrWrongLeader
-			DPrintf("KV[%d] Put[%s] index=[%d] Lost leadership", kv.me, args.Key, index)
+			DPrintf("KV[%d] [%d]Put[%s] index=[%d] Lost leadership", kv.me, args.ClerkId, args.Key, index)
 			delete(kv.opResults, index)
 			kv.mu.Unlock()
 			return
@@ -195,7 +196,7 @@ func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
 
 	if kv.killed() {
-		DPrintf("KV[%d] Append[%s] killed", kv.me, args.Key)
+		DPrintf("KV[%d] [%d]Append[%s] killed", kv.me, args.ClerkId, args.Key)
 		reply.Err = ErrWrongLeader
 		return
 	}
@@ -207,12 +208,12 @@ func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
 	index, _, isLeader := kv.rf.Start(op)
 
 	if !isLeader {
-		DPrintf("KV[%d] Append[%s] NOT Leader", kv.me, args.Key)
+		DPrintf("KV[%d] [%d]Append[%s] NOT Leader", kv.me, args.ClerkId, args.Key)
 		reply.Err = ErrWrongLeader
 		kv.mu.Unlock()
 		return
 	} else {
-		DPrintf("KV[%d] Append[%s] index=[%d] Requested raft", kv.me, args.Key, index)
+		DPrintf("KV[%d] [%d]Append[%s] index=[%d] Value=[%s] Requested raft", kv.me, args.ClerkId, args.Key, index, args.Value)
 	}
 
 	kv.opResults[index] = OpResult{valid: false, err: "", value: ""}
@@ -226,7 +227,7 @@ func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
 
 		if kv.killed() {
 			reply.Err = ErrWrongLeader
-			DPrintf("KV[%d] Append[%s] index=[%d] Killed", kv.me, args.Key, index)
+			DPrintf("KV[%d] [%d]Append[%s] index=[%d] Killed", kv.me, args.ClerkId, args.Key, index)
 			delete(kv.opResults, index)
 			kv.mu.Unlock()
 			return
@@ -234,7 +235,7 @@ func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
 
 		if kv.opResults[index].valid {
 			reply.Err = kv.opResults[index].err
-			DPrintf("KV[%d] Append[%s] index=[%d] %s", kv.me, args.Key, index, reply.Err)
+			DPrintf("KV[%d] [%d]Append[%s] index=[%d] %s", kv.me, args.ClerkId, args.Key, index, reply.Err)
 			delete(kv.opResults, index)
 			kv.mu.Unlock()
 			return
@@ -244,7 +245,7 @@ func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
 
 		if !isLeader {
 			reply.Err = ErrWrongLeader
-			DPrintf("KV[%d] Append[%s] index=[%d] Lost leadership", kv.me, args.Key, index)
+			DPrintf("KV[%d] [%d]Append[%s] index=[%d] Lost leadership", kv.me, args.ClerkId, args.Key, index)
 			delete(kv.opResults, index)
 			kv.mu.Unlock()
 			return
@@ -316,12 +317,19 @@ func (kv *KVServer) applyChReader() {
 		if msg.CommandValid {
 			kv.mu.Lock()
 			op := msg.Command.(Op)
-			DPrintf("KV[%d] applyChReader OpType=[%d] Key=[%s] Value=[%s]", kv.me, op.OpType, op.Key, op.Value)
+			_, needResult := kv.opResults[msg.CommandIndex]
+			_, isLeader := kv.rf.GetState()
+
 			if op.OpType == OP_TYPE_GET {
-				_, needResult := kv.opResults[msg.CommandIndex]
+				DPrintf("KV[%d] Get[%s] index=[%d] Apply", kv.me, op.Key, msg.CommandIndex)
 				if needResult {
 					value, foundKey := kv.db[op.Key]
-					if foundKey {
+					if !isLeader {
+						res := OpResult{}
+						res.valid = true
+						res.err = ErrWrongLeader
+						kv.opResults[msg.CommandIndex] = res
+					} else if foundKey {
 						res := OpResult{}
 						res.valid = true
 						res.err = OK
@@ -335,6 +343,7 @@ func (kv *KVServer) applyChReader() {
 					}
 				}
 			} else if op.OpType == OP_TYPE_PUT {
+				DPrintf("KV[%d] Put[%s] index=[%d] Value=[%s] Apply", kv.me, op.Key, msg.CommandIndex, op.Value)
 				history := kv.FindOrAddClerkWriteHistory(op.ClerkId)
 				if op.SequenceNumber > history.recentSequenceNumber {
 					if op.SequenceNumber != history.recentSequenceNumber+1 {
@@ -343,14 +352,21 @@ func (kv *KVServer) applyChReader() {
 					kv.db[op.Key] = op.Value
 					history.recentSequenceNumber = op.SequenceNumber
 				}
-				_, needResult := kv.opResults[msg.CommandIndex]
 				if needResult {
-					res := OpResult{}
-					res.valid = true
-					res.err = OK
-					kv.opResults[msg.CommandIndex] = res
+					if !isLeader {
+						res := OpResult{}
+						res.valid = true
+						res.err = ErrWrongLeader
+						kv.opResults[msg.CommandIndex] = res
+					} else {
+						res := OpResult{}
+						res.valid = true
+						res.err = OK
+						kv.opResults[msg.CommandIndex] = res
+					}
 				}
 			} else if op.OpType == OP_TYPE_APPEND {
+				DPrintf("KV[%d] Append[%s] index=[%d] Value=[%s] Apply", kv.me, op.Key, msg.CommandIndex, op.Value)
 				history := kv.FindOrAddClerkWriteHistory(op.ClerkId)
 				if op.SequenceNumber > history.recentSequenceNumber {
 					if op.SequenceNumber != history.recentSequenceNumber+1 {
@@ -364,12 +380,18 @@ func (kv *KVServer) applyChReader() {
 					}
 					history.recentSequenceNumber = op.SequenceNumber
 				}
-				_, needResult := kv.opResults[msg.CommandIndex]
 				if needResult {
-					res := OpResult{}
-					res.valid = true
-					res.err = OK
-					kv.opResults[msg.CommandIndex] = res
+					if !isLeader {
+						res := OpResult{}
+						res.valid = true
+						res.err = ErrWrongLeader
+						kv.opResults[msg.CommandIndex] = res
+					} else {
+						res := OpResult{}
+						res.valid = true
+						res.err = OK
+						kv.opResults[msg.CommandIndex] = res
+					}
 				}
 			}
 			kv.mu.Unlock()

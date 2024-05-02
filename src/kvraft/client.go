@@ -51,6 +51,7 @@ func (ck *Clerk) Get(key string) string {
 	reply := GetReply{}
 
 	for {
+		DPrintf("Clerk[%d] Call KV[%d] Get[%s]", ck.clerkId, ck.assumedLeaderId, args.Key)
 		ok := ck.servers[ck.assumedLeaderId].Call("KVServer.Get", &args, &reply)
 
 		if ok {
@@ -86,6 +87,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	reply := PutAppendReply{}
 
 	for {
+		DPrintf("Clerk[%d] Call KV[%d] %s[%s] Value=[%s]", ck.clerkId, ck.assumedLeaderId, op, args.Key, args.Value)
 		ok := ck.servers[ck.assumedLeaderId].Call("KVServer."+op, &args, &reply)
 
 		if ok {
