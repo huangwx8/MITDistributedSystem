@@ -210,6 +210,11 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 
 	pIndex := rf.l2p(index)
 
+	if pIndex < 0 {
+		// Application passed in an old index, that's fine
+		return
+	}
+
 	lastIncludedLogEntry := rf.log[pIndex]
 
 	rf.snapshot = snapshot

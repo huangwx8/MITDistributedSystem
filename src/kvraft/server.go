@@ -4,6 +4,7 @@ import (
 	"6.5840/labgob"
 	"6.5840/labrpc"
 	"6.5840/raft"
+	"bytes"
 	"fmt"
 	"log"
 	"sync"
@@ -11,7 +12,7 @@ import (
 	"time"
 )
 
-const Debug = true
+const Debug = false
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug {
@@ -46,7 +47,7 @@ type OpResult struct {
 }
 
 type ClerkWriteHistory struct {
-	recentSequenceNumber int
+	RecentSequenceNumber int
 }
 
 type KVServer struct {
@@ -60,9 +61,12 @@ type KVServer struct {
 
 	// Your definitions here.
 
+	persister *raft.Persister
+
 	db                   map[string]string
 	opResults            map[int]OpResult
 	clerkWriteHistoryMap map[int64]*ClerkWriteHistory
+	appliedIndex         int
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
@@ -133,7 +137,7 @@ func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
 
 	if kv.killed() {
-		DPrintf("KV[%d] [%d]Put[%s] killed", kv.me, args.ClerkId, args.Key)
+		DPrintf("KV[%d] [%d]Put[%s] Seq[%d] killed", kv.me, args.ClerkId, args.Key, args.SequenceNumber)
 		reply.Err = ErrWrongLeader
 		return
 	}
@@ -145,12 +149,12 @@ func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
 	index, _, isLeader := kv.rf.Start(op)
 
 	if !isLeader {
-		DPrintf("KV[%d] [%d]Put[%s] NOT Leader", kv.me, args.ClerkId, args.Key)
+		DPrintf("KV[%d] [%d]Put[%s] Seq[%d] NOT Leader", kv.me, args.ClerkId, args.Key, args.SequenceNumber)
 		reply.Err = ErrWrongLeader
 		kv.mu.Unlock()
 		return
 	} else {
-		DPrintf("KV[%d] [%d]Put[%s] index=[%d] Value=[%s] Requested raft", kv.me, args.ClerkId, args.Key, index, args.Value)
+		DPrintf("KV[%d] [%d]Put[%s] Seq[%d] index=[%d] Value=[%s] Requested raft", kv.me, args.ClerkId, args.Key, args.SequenceNumber, index, args.Value)
 	}
 
 	kv.opResults[index] = OpResult{valid: false, err: "", value: ""}
@@ -164,7 +168,7 @@ func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
 
 		if kv.killed() {
 			reply.Err = ErrWrongLeader
-			DPrintf("KV[%d] [%d]Put[%s] index=[%d] Killed", kv.me, args.ClerkId, args.Key, index)
+			DPrintf("KV[%d] [%d]Put[%s] Seq[%d] index=[%d] Killed", kv.me, args.ClerkId, args.Key, args.SequenceNumber, index)
 			delete(kv.opResults, index)
 			kv.mu.Unlock()
 			return
@@ -172,7 +176,7 @@ func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
 
 		if kv.opResults[index].valid {
 			reply.Err = kv.opResults[index].err
-			DPrintf("KV[%d] [%d]Put[%s] index=[%d] %s", kv.me, args.ClerkId, args.Key, index, reply.Err)
+			DPrintf("KV[%d] [%d]Put[%s] Seq[%d] index=[%d] %s", kv.me, args.ClerkId, args.Key, args.SequenceNumber, index, reply.Err)
 			delete(kv.opResults, index)
 			kv.mu.Unlock()
 			return
@@ -182,7 +186,7 @@ func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
 
 		if !isLeader {
 			reply.Err = ErrWrongLeader
-			DPrintf("KV[%d] [%d]Put[%s] index=[%d] Lost leadership", kv.me, args.ClerkId, args.Key, index)
+			DPrintf("KV[%d] [%d]Put[%s] Seq[%d] index=[%d] Lost leadership", kv.me, args.ClerkId, args.Key, args.SequenceNumber, index)
 			delete(kv.opResults, index)
 			kv.mu.Unlock()
 			return
@@ -196,7 +200,7 @@ func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
 
 	if kv.killed() {
-		DPrintf("KV[%d] [%d]Append[%s] killed", kv.me, args.ClerkId, args.Key)
+		DPrintf("KV[%d] [%d]Append[%s] Seq[%d] killed", kv.me, args.ClerkId, args.Key, args.SequenceNumber)
 		reply.Err = ErrWrongLeader
 		return
 	}
@@ -208,12 +212,12 @@ func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
 	index, _, isLeader := kv.rf.Start(op)
 
 	if !isLeader {
-		DPrintf("KV[%d] [%d]Append[%s] NOT Leader", kv.me, args.ClerkId, args.Key)
+		DPrintf("KV[%d] [%d]Append[%s] Seq[%d] NOT Leader", kv.me, args.ClerkId, args.Key, args.SequenceNumber)
 		reply.Err = ErrWrongLeader
 		kv.mu.Unlock()
 		return
 	} else {
-		DPrintf("KV[%d] [%d]Append[%s] index=[%d] Value=[%s] Requested raft", kv.me, args.ClerkId, args.Key, index, args.Value)
+		DPrintf("KV[%d] [%d]Append[%s] Seq[%d] index=[%d] Value=[%s] Requested raft", kv.me, args.ClerkId, args.Key, args.SequenceNumber, index, args.Value)
 	}
 
 	kv.opResults[index] = OpResult{valid: false, err: "", value: ""}
@@ -227,7 +231,7 @@ func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
 
 		if kv.killed() {
 			reply.Err = ErrWrongLeader
-			DPrintf("KV[%d] [%d]Append[%s] index=[%d] Killed", kv.me, args.ClerkId, args.Key, index)
+			DPrintf("KV[%d] [%d]Append[%s] Seq[%d] index=[%d] Killed", kv.me, args.ClerkId, args.Key, args.SequenceNumber, index)
 			delete(kv.opResults, index)
 			kv.mu.Unlock()
 			return
@@ -235,7 +239,7 @@ func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
 
 		if kv.opResults[index].valid {
 			reply.Err = kv.opResults[index].err
-			DPrintf("KV[%d] [%d]Append[%s] index=[%d] %s", kv.me, args.ClerkId, args.Key, index, reply.Err)
+			DPrintf("KV[%d] [%d]Append[%s] Seq[%d] index=[%d] %s", kv.me, args.ClerkId, args.Key, args.SequenceNumber, index, reply.Err)
 			delete(kv.opResults, index)
 			kv.mu.Unlock()
 			return
@@ -245,7 +249,7 @@ func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
 
 		if !isLeader {
 			reply.Err = ErrWrongLeader
-			DPrintf("KV[%d] [%d]Append[%s] index=[%d] Lost leadership", kv.me, args.ClerkId, args.Key, index)
+			DPrintf("KV[%d] [%d]Append[%s] Seq[%d] index=[%d] Lost leadership", kv.me, args.ClerkId, args.Key, args.SequenceNumber, index)
 			delete(kv.opResults, index)
 			kv.mu.Unlock()
 			return
@@ -301,11 +305,16 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.db = make(map[string]string)
 	kv.opResults = make(map[int]OpResult)
 	kv.clerkWriteHistoryMap = make(map[int64]*ClerkWriteHistory)
+	kv.appliedIndex = 0
 
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
 	// You may need initialization code here.
+
+	kv.persister = persister
+
+	kv.readSnapshot(persister.ReadSnapshot())
 
 	go kv.applyChReader()
 
@@ -343,14 +352,14 @@ func (kv *KVServer) applyChReader() {
 					}
 				}
 			} else if op.OpType == OP_TYPE_PUT {
-				DPrintf("KV[%d] Put[%s] index=[%d] Value=[%s] Apply", kv.me, op.Key, msg.CommandIndex, op.Value)
+				DPrintf("KV[%d] Put[%s] Seq[%d] index=[%d] Value=[%s] Apply", kv.me, op.Key, op.SequenceNumber, msg.CommandIndex, op.Value)
 				history := kv.FindOrAddClerkWriteHistory(op.ClerkId)
-				if op.SequenceNumber > history.recentSequenceNumber {
-					if op.SequenceNumber != history.recentSequenceNumber+1 {
-						panic(fmt.Sprintf("nonconsecutive seq[%d], recent=[%d]", op.SequenceNumber, history.recentSequenceNumber))
+				if op.SequenceNumber > history.RecentSequenceNumber {
+					if op.SequenceNumber != history.RecentSequenceNumber+1 {
+						panic(fmt.Sprintf("nonconsecutive seq[%d], recent=[%d]", op.SequenceNumber, history.RecentSequenceNumber))
 					}
 					kv.db[op.Key] = op.Value
-					history.recentSequenceNumber = op.SequenceNumber
+					history.RecentSequenceNumber = op.SequenceNumber
 				}
 				if needResult {
 					if !isLeader {
@@ -366,11 +375,11 @@ func (kv *KVServer) applyChReader() {
 					}
 				}
 			} else if op.OpType == OP_TYPE_APPEND {
-				DPrintf("KV[%d] Append[%s] index=[%d] Value=[%s] Apply", kv.me, op.Key, msg.CommandIndex, op.Value)
+				DPrintf("KV[%d] Append[%s] Seq[%d] index=[%d] Value=[%s] Apply", kv.me, op.Key, op.SequenceNumber, msg.CommandIndex, op.Value)
 				history := kv.FindOrAddClerkWriteHistory(op.ClerkId)
-				if op.SequenceNumber > history.recentSequenceNumber {
-					if op.SequenceNumber != history.recentSequenceNumber+1 {
-						panic(fmt.Sprintf("nonconsecutive seq[%d], recent=[%d]", op.SequenceNumber, history.recentSequenceNumber))
+				if op.SequenceNumber > history.RecentSequenceNumber {
+					if op.SequenceNumber != history.RecentSequenceNumber+1 {
+						panic(fmt.Sprintf("nonconsecutive seq[%d], recent=[%d]", op.SequenceNumber, history.RecentSequenceNumber))
 					}
 					_, foundKey := kv.db[op.Key]
 					if foundKey {
@@ -378,7 +387,7 @@ func (kv *KVServer) applyChReader() {
 					} else {
 						kv.db[op.Key] = op.Value
 					}
-					history.recentSequenceNumber = op.SequenceNumber
+					history.RecentSequenceNumber = op.SequenceNumber
 				}
 				if needResult {
 					if !isLeader {
@@ -394,6 +403,17 @@ func (kv *KVServer) applyChReader() {
 					}
 				}
 			}
+
+			kv.appliedIndex = msg.CommandIndex
+
+			if kv.maxraftstate > 0 && kv.persister.RaftStateSize() > kv.maxraftstate {
+				kv.writeSnapshot(msg.CommandIndex)
+			}
+
+			kv.mu.Unlock()
+		} else if msg.SnapshotValid {
+			kv.mu.Lock()
+			kv.readSnapshot(msg.Snapshot)
 			kv.mu.Unlock()
 		}
 	}
@@ -403,9 +423,45 @@ func (kv *KVServer) FindOrAddClerkWriteHistory(clerkId int64) *ClerkWriteHistory
 	clerkWriteHistory, ok := kv.clerkWriteHistoryMap[clerkId]
 
 	if !ok {
-		clerkWriteHistory = &ClerkWriteHistory{recentSequenceNumber: 0}
+		clerkWriteHistory = &ClerkWriteHistory{RecentSequenceNumber: 0}
 		kv.clerkWriteHistoryMap[clerkId] = clerkWriteHistory
 	}
 
 	return clerkWriteHistory
+}
+
+func (kv *KVServer) writeSnapshot(commandIndex int) {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(commandIndex)
+	e.Encode(kv.db)
+	e.Encode(kv.clerkWriteHistoryMap)
+	kv.rf.Snapshot(commandIndex, w.Bytes())
+	DPrintf("KV[%d]: writeSnapshot ok commandIndex=[%d]", kv.me, commandIndex)
+}
+
+func (kv *KVServer) readSnapshot(data []byte) {
+	if data == nil || len(data) < 1 { // bootstrap without any state?
+		return
+	}
+
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var snapshotIndex int
+	var db map[string]string
+	var his map[int64]*ClerkWriteHistory
+	if d.Decode(&snapshotIndex) != nil ||
+		d.Decode(&db) != nil ||
+		d.Decode(&his) != nil {
+		DPrintf("readSnapshot err")
+	} else {
+		if snapshotIndex <= kv.appliedIndex {
+			DPrintf("KV[%d]: readSnapshot skip snapshotIndex[%d] <= appliedIndex[%d]", kv.me, snapshotIndex, kv.appliedIndex)
+		} else {
+			kv.db = db
+			kv.clerkWriteHistoryMap = his
+			kv.appliedIndex = snapshotIndex
+			DPrintf("KV[%d]: readSnapshot ok appliedIndex=[%d]", kv.me, kv.appliedIndex)
+		}
+	}
 }
